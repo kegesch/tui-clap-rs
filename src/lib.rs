@@ -7,6 +7,11 @@ use crossterm::event::{read, Event, KeyCode, poll};
 use std::{thread};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use clap::{AppSettings, Clap, App};
+use std::borrow::BorrowMut;
+use tui::Frame;
+use tui::backend::CrosstermBackend;
+use std::io::Write;
 
 pub struct Events {
     rx: mpsc::Receiver<Event>,
@@ -23,6 +28,11 @@ pub struct CommandInput {
 #[derive(Default)]
 pub struct CommandInputState {
     content: String,
+}
+
+#[derive(Default)]
+pub struct CommandOutputState {
+    history: Vec<String>
 }
 
 impl CommandInputState {
@@ -135,6 +145,92 @@ impl Events {
         self.ignore_exit_key.store(false, Ordering::Relaxed);
     }
 }
+
+
+
+pub struct TuiClap {
+    command_input_state: CommandInputState,
+    command_output_state: CommandOutputState,
+    command_input_widget: CommandInput,
+    clap: App<'static>,
+    events: Events,
+}
+
+impl TuiClap {
+    pub fn from_app(app: App<'static>) -> TuiClap {
+        TuiClap {
+            command_input_state: CommandInputState::default(),
+            command_output_state: CommandOutputState::default(),
+            command_input_widget: Default::default(),
+            clap: app,
+            events: Events::new(),
+        }
+    }
+
+    pub fn fetch_event(&mut self) -> Result<(), mpsc::RecvError> {
+        if let Event::Key(input) = self.events.next()? {
+            match input.code {
+                KeyCode::Enter => {
+                    self.parse()
+                }
+                KeyCode::Char(char) => {
+                    self.command_input_state.add_char(char);
+                }
+                KeyCode::Backspace => {
+                    self.command_input_state.del_char();
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    pub fn state(&mut self) -> &mut CommandInputState {
+        self.command_input_state.borrow_mut()
+    }
+
+    pub fn parse(&mut self) {
+        let commands_vec = self.command_input_state.content.split(' ');
+        let matches = self.clap.clone().get_matches_from(commands_vec);
+
+        let config = matches.value_of("config").unwrap_or("default.conf");
+        println!("Value for config: {}", config);
+
+        // Calling .unwrap() is safe here because "INPUT" is required (if "INPUT" wasn't
+        // required we could have used an 'if let' to conditionally get the value)
+        println!("Using input file: {}", matches.value_of("INPUT").unwrap());
+
+        // Vary the output based on how many times the user used the "verbose" flag
+        // (i.e. 'myprog -v -v -v' or 'myprog -vvv' vs 'myprog -v'
+        match matches.occurrences_of("v") {
+            0 => println!("No verbose info"),
+            1 => println!("Some verbose info"),
+            2 => println!("Tons of verbose info"),
+            3 | _ => println!("Don't be crazy"),
+        }
+
+        // You can handle information about subcommands by requesting their matches by name
+        // (as below), requesting just the name used, or both at the same time
+        if let Some(matches) = matches.subcommand_matches("test") {
+            if matches.is_present("debug") {
+                println!("Printing debug info...");
+            } else {
+                println!("Printing normally...");
+            }
+        }
+
+        self.command_input_state.content = String::new();
+    }
+
+    pub fn input_widget(&mut self) -> &mut CommandInput {
+        self.input_widget().borrow_mut()
+    }
+
+    pub fn render_input<W: Write>(&mut self, frame: &mut Frame<CrosstermBackend<W>>, area: Rect) {
+        frame.render_stateful_widget(self.command_input_widget.clone(), area, self.command_input_state.borrow_mut());
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
