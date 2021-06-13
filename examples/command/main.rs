@@ -83,7 +83,7 @@ fn edge_inset(area: &Rect, margin: u16) -> Rect {
     inset_area
 }
 
-fn handle_matches(matches: ArgMatches) -> Vec<String> {
+fn handle_matches(matches: ArgMatches) -> Result<Vec<String>, String> {
     let mut output = vec![];
     
     let config = matches.value_of("config").unwrap_or("default.conf");
@@ -117,5 +117,5 @@ fn handle_matches(matches: ArgMatches) -> Vec<String> {
         }
     };
 
-    output
+    Ok(output)
 }

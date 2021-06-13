@@ -174,11 +174,11 @@ pub struct TuiClap<'a> {
     command_output_widget: CommandOutput,
     clap: App<'a>,
     events: Events,
-    handle_matches: Box<dyn Fn(ArgMatches) -> Vec<String>>,
+    handle_matches: Box<dyn Fn(ArgMatches) -> Result<Vec<String>, String>>,
 }
 
 impl TuiClap<'_> {
-    pub fn from_app<'a>(app: App<'a>, handle_matches: impl Fn(ArgMatches) -> Vec<String> + 'a + 'static) -> TuiClap {
+    pub fn from_app<'a>(app: App<'a>, handle_matches: impl Fn(ArgMatches) -> Result<Vec<String>, String>  + 'a + 'static) -> TuiClap {
         TuiClap {
             command_input_state: CommandInputState::default(),
             command_output_state: CommandOutputState::default(),
@@ -221,8 +221,10 @@ impl TuiClap<'_> {
     }
 
     pub fn parse(&mut self) {
-        let commands_vec = self.command_input_state.content.split(' ');
-        let matches_result = self.clap.try_get_matches_from_mut(commands_vec);
+        let content = self.command_input_state.content.clone();
+        let commands_vec = content.split(' ').collect::<Vec<&str>>();
+        let matches_result = self.clap.try_get_matches_from_mut(commands_vec.clone());
+
         match matches_result {
             Ok(matches) => {
                 self.handle_matches(matches)
@@ -251,10 +253,15 @@ impl TuiClap<'_> {
 
     fn handle_matches(&mut self, matches: ArgMatches) {
         let handle = &self.handle_matches;
-        let output: Vec<String> = handle(matches);
-        for out in output {
-            self.write_to_output(out);
+        let output_res: Result<Vec<String>, String> = handle(matches);
+        if let Ok(output) = output_res {
+            for out in output {
+                self.write_to_output(out);
+            }
+        } else {
+            self.write_to_output(output_res.unwrap_err())
         }
+
     }
 
     pub fn input_widget(&mut self) -> &mut CommandInput {
