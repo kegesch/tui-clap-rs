@@ -47,8 +47,10 @@ fn draw<B: Backend>(terminal: &mut Terminal<B>, tui: &mut TuiClap) -> io::Result
 }
 
 // function that handles arg matches and returns a vec of strings that is pushed to the output widget
-fn handle_matches(matches: ArgMatches) -> Vec<String> {}
-    vec!["handled".to_string()]
+// return Ok() with vec of message that should be added to the output
+// return Err(message) to display an error in the output
+fn handle_matches(matches: ArgMatches) -> Result<Vec<String>, String> {}
+    Ok(vec!["handled".to_string()])
 }
 ```
 
