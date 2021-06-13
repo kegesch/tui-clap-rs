@@ -167,18 +167,18 @@ impl Events {
 
 
 
-pub struct TuiClap {
+pub struct TuiClap<'a> {
     command_input_state: CommandInputState,
     command_output_state: CommandOutputState,
     command_input_widget: CommandInput,
     command_output_widget: CommandOutput,
-    clap: App<'static>,
+    clap: App<'a>,
     events: Events,
     handle_matches: Box<dyn Fn(ArgMatches) -> Vec<String>>,
 }
 
-impl TuiClap {
-    pub fn from_app(app: App<'static>, handle_matches: impl Fn(ArgMatches) -> Vec<String> + 'static) -> TuiClap {
+impl TuiClap<'_> {
+    pub fn from_app<'a>(app: App<'a>, handle_matches: impl Fn(ArgMatches) -> Vec<String> + 'a + 'static) -> TuiClap {
         TuiClap {
             command_input_state: CommandInputState::default(),
             command_output_state: CommandOutputState::default(),
