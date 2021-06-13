@@ -7,11 +7,12 @@ use crossterm::event::{read, Event, KeyCode, poll};
 use std::{thread};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use clap::{AppSettings, Clap, App};
+use clap::{AppSettings, Clap, App, ArgMatches, Error, ErrorKind};
 use std::borrow::BorrowMut;
 use tui::Frame;
-use tui::backend::CrosstermBackend;
-use std::io::Write;
+use tui::backend::{CrosstermBackend, Backend};
+use std::io::{Write, BufWriter};
+use std::str::Lines;
 
 pub struct Events {
     rx: mpsc::Receiver<Event>,
@@ -19,15 +20,18 @@ pub struct Events {
     ignore_exit_key: Arc<AtomicBool>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CommandInput {
     prompt: String,
-    margin: u16,
 }
 
 #[derive(Default)]
 pub struct CommandInputState {
     content: String,
+}
+
+#[derive(Default, Clone)]
+pub struct CommandOutput {
 }
 
 #[derive(Default)]
@@ -50,14 +54,8 @@ impl CommandInputState {
 }
 
 impl CommandInput {
-    pub fn prompt(mut self, prompt: &str) -> Self {
+    pub fn prompt(&mut self, prompt: &str) {
         self.prompt = prompt.to_string();
-        self
-    }
-
-    pub fn margin(mut self, margin: u16) -> Self {
-        self.margin = margin;
-        self
     }
 }
 
@@ -65,14 +63,35 @@ impl StatefulWidget for CommandInput {
     type State = CommandInputState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        buf.set_string(area.left() + self.margin, area.top() + self.margin, &self.prompt, Style::default());
-        buf.set_string(area.left() + self.margin + self.prompt.len() as u16, area.top() + self.margin, &state.content, Style::default());
+        buf.set_string(area.left(), area.top(), &self.prompt, Style::default());
+        buf.set_string(area.left() + self.prompt.len() as u16, area.top(), &state.content, Style::default());
     }
 }
 
 impl Widget for CommandInput {
     fn render(self, area: Rect, buf: &mut Buffer) {
         StatefulWidget::render(self, area, buf, &mut CommandInputState::default())
+    }
+}
+
+impl StatefulWidget for CommandOutput {
+    type State = CommandOutputState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        let max_lines = area.height - 1;
+
+        let history_to_show = state.history.iter().rev().take(max_lines as usize).rev();
+        let mut y = 0;
+        for line in history_to_show {
+            buf.set_string(area.left(), area.top() + y, line, Style::default());
+            y += 1;
+        }
+    }
+}
+
+impl Widget for CommandOutput {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        StatefulWidget::render(self, area, buf, &mut CommandOutputState::default())
     }
 }
 
@@ -152,18 +171,22 @@ pub struct TuiClap {
     command_input_state: CommandInputState,
     command_output_state: CommandOutputState,
     command_input_widget: CommandInput,
+    command_output_widget: CommandOutput,
     clap: App<'static>,
     events: Events,
+    handle_matches: Box<dyn Fn(ArgMatches) -> Vec<String>>,
 }
 
 impl TuiClap {
-    pub fn from_app(app: App<'static>) -> TuiClap {
+    pub fn from_app(app: App<'static>, handle_matches: impl Fn(ArgMatches) -> Vec<String> + 'static) -> TuiClap {
         TuiClap {
             command_input_state: CommandInputState::default(),
             command_output_state: CommandOutputState::default(),
             command_input_widget: Default::default(),
+            command_output_widget: Default::default(),
             clap: app,
             events: Events::new(),
+            handle_matches: Box::new(handle_matches)
         }
     }
 
@@ -171,7 +194,8 @@ impl TuiClap {
         if let Event::Key(input) = self.events.next()? {
             match input.code {
                 KeyCode::Enter => {
-                    self.parse()
+                    self.parse();
+                    self.command_input_state.content.clear();
                 }
                 KeyCode::Char(char) => {
                     self.command_input_state.add_char(char);
@@ -185,57 +209,67 @@ impl TuiClap {
         Ok(())
     }
 
+    pub fn write_to_output(&mut self, string: String) {
+        let lines: Lines = string.lines();
+        for str in lines {
+            self.command_output_state.history.push(str.to_string());
+        }
+    }
+
     pub fn state(&mut self) -> &mut CommandInputState {
         self.command_input_state.borrow_mut()
     }
 
     pub fn parse(&mut self) {
         let commands_vec = self.command_input_state.content.split(' ');
-        let matches = self.clap.clone().get_matches_from(commands_vec);
-
-        let config = matches.value_of("config").unwrap_or("default.conf");
-        println!("Value for config: {}", config);
-
-        // Calling .unwrap() is safe here because "INPUT" is required (if "INPUT" wasn't
-        // required we could have used an 'if let' to conditionally get the value)
-        println!("Using input file: {}", matches.value_of("INPUT").unwrap());
-
-        // Vary the output based on how many times the user used the "verbose" flag
-        // (i.e. 'myprog -v -v -v' or 'myprog -vvv' vs 'myprog -v'
-        match matches.occurrences_of("v") {
-            0 => println!("No verbose info"),
-            1 => println!("Some verbose info"),
-            2 => println!("Tons of verbose info"),
-            3 | _ => println!("Don't be crazy"),
-        }
-
-        // You can handle information about subcommands by requesting their matches by name
-        // (as below), requesting just the name used, or both at the same time
-        if let Some(matches) = matches.subcommand_matches("test") {
-            if matches.is_present("debug") {
-                println!("Printing debug info...");
-            } else {
-                println!("Printing normally...");
+        let matches_result = self.clap.try_get_matches_from_mut(commands_vec);
+        match matches_result {
+            Ok(matches) => {
+                self.handle_matches(matches)
+            }
+            Err(err) => {
+                match err.kind {
+                    ErrorKind::DisplayHelp => {
+                        let mut buf = Vec::new();
+                        let mut writer = Box::new(&mut buf);
+                        self.clap.write_help(&mut writer);
+                        self.write_to_output(std::str::from_utf8(buf.as_slice()).unwrap().to_string());
+                    }
+                    ErrorKind::DisplayVersion => {
+                        self.write_to_output(self.clap.render_long_version());
+                    }
+                    ErrorKind::Format => {}
+                    _ => {
+                        self.write_to_output(format!("error: {}", err))
+                    }
+                }
             }
         }
 
-        self.command_input_state.content = String::new();
+
+    }
+
+    fn handle_matches(&mut self, matches: ArgMatches) {
+        let handle = &self.handle_matches;
+        let output: Vec<String> = handle(matches);
+        for out in output {
+            self.write_to_output(out);
+        }
     }
 
     pub fn input_widget(&mut self) -> &mut CommandInput {
-        self.input_widget().borrow_mut()
+        self.command_input_widget.borrow_mut()
     }
 
-    pub fn render_input<W: Write>(&mut self, frame: &mut Frame<CrosstermBackend<W>>, area: Rect) {
+    pub fn render_input<B: Backend>(&mut self, frame: &mut Frame<B>, area: Rect) {
         frame.render_stateful_widget(self.command_input_widget.clone(), area, self.command_input_state.borrow_mut());
     }
-}
 
+    pub fn output_widget(&mut self) -> &mut CommandOutput {
+        self.command_output_widget.borrow_mut()
+    }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+    pub fn render_output<B: Backend>(&mut self, frame: &mut Frame<B>, area: Rect) {
+        frame.render_stateful_widget(self.command_output_widget.clone(), area, self.command_output_state.borrow_mut());
     }
 }
