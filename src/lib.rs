@@ -7,11 +7,10 @@ use crossterm::event::{read, Event, KeyCode, poll};
 use std::{thread};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use clap::{AppSettings, Clap, App, ArgMatches, Error, ErrorKind};
+use clap::{App, ArgMatches, ErrorKind};
 use std::borrow::BorrowMut;
 use tui::Frame;
-use tui::backend::{CrosstermBackend, Backend};
-use std::io::{Write, BufWriter};
+use tui::backend::{Backend};
 use std::str::Lines;
 
 pub struct Events {
@@ -79,10 +78,31 @@ impl StatefulWidget for CommandOutput {
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let max_lines = area.height - 1;
+        let max_chars_per_line = area.width - 1;
+
+        let mut lines_to_render: Vec<&str> = vec![];
 
         let history_to_show = state.history.iter().rev().take(max_lines as usize).rev();
         let mut y = 0;
         for line in history_to_show {
+            if line.len() > max_chars_per_line as usize {
+                let mut rest_of_line = line.as_str();
+                loop {
+                    if rest_of_line.len() > max_chars_per_line as usize {
+                        let split_line = rest_of_line.split_at(max_chars_per_line as usize);
+                        lines_to_render.push(split_line.0);
+                        rest_of_line = split_line.1;
+                    } else {
+                        lines_to_render.push(rest_of_line);
+                        break;
+                    }
+                }
+            } else {
+                lines_to_render.push(line);
+            }
+        }
+
+        for line in lines_to_render {
             buf.set_string(area.left(), area.top() + y, line, Style::default());
             y += 1;
         }
@@ -110,19 +130,21 @@ impl Default for Config {
     }
 }
 
-impl Events {
-    pub fn new() -> Events {
-        Events::with_config(Config::default())
+impl Default for Events {
+    fn default() -> Self {
+        Events::from_config(Config::default())
     }
+}
 
-    pub fn with_config(config: Config) -> Events {
+impl Events {
+    pub fn from_config(config: Config) -> Events {
         let (tx, rx) = mpsc::channel();
-        let ignore_exit_key = Arc::new(AtomicBool::new(true));
+        let ignore_exit_key = Arc::new(AtomicBool::new(false));
         let input_handle = {
-            let tx = tx.clone();
             let ignore_exit_key = ignore_exit_key.clone();
             thread::spawn(move || {
                 loop {
+
                     if let Ok(b) = poll(config.tick_rate) {
                         if !b {
                             continue;
@@ -185,7 +207,7 @@ impl TuiClap<'_> {
             command_input_widget: Default::default(),
             command_output_widget: Default::default(),
             clap: app,
-            events: Events::new(),
+            events: Events::default(),
             handle_matches: Box::new(handle_matches)
         }
     }
@@ -234,7 +256,7 @@ impl TuiClap<'_> {
                     ErrorKind::DisplayHelp => {
                         let mut buf = Vec::new();
                         let mut writer = Box::new(&mut buf);
-                        self.clap.write_help(&mut writer);
+                        self.clap.write_help(&mut writer).expect("Could not write help");
                         self.write_to_output(std::str::from_utf8(buf.as_slice()).unwrap().to_string());
                     }
                     ErrorKind::DisplayVersion => {

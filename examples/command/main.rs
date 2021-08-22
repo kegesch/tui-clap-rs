@@ -4,22 +4,7 @@ use tui::backend::{CrosstermBackend, Backend};
 use tui::widgets::{Block, Borders};
 use tui::layout::{Layout, Constraint, Direction, Rect};
 use tui_clap::TuiClap;
-use clap::{AppSettings, Clap, App, Arg, ArgMatches, load_yaml};
-
-
-#[derive(Clap)]
-#[clap(version = "1.0", author = "Max M. <max@m.com>")]
-#[clap(setting = AppSettings::ColoredHelp)]
-struct Opts {
-    /// Sets a custom config file. Could have been an Option<T> with no default too
-    #[clap(short, long, default_value = "default.conf")]
-    config: String,
-    /// Some input. Because this isn't an Option<T> it's required to be used
-    input: String,
-    /// A level of verbosity, and can be used multiple times
-    #[clap(short, long, parse(from_occurrences))]
-    verbose: i32,
-}
+use clap::{App, ArgMatches, load_yaml};
 
 fn main() -> Result<(), io::Error> {
     let yaml = load_yaml!("cli.yaml");
@@ -30,12 +15,12 @@ fn main() -> Result<(), io::Error> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut tui = TuiClap::from_app(app, handle_matches);
-    tui.input_widget().prompt("tradrs > ");
+    tui.input_widget().prompt("prompt > ");
 
-    terminal.clear();
+    terminal.clear().expect("Could not clear terminal");
     loop {
         draw(&mut terminal, &mut tui)?;
-        tui.fetch_event();
+        tui.fetch_event().expect("Could not fetch input event");
     }
 }
 
@@ -56,11 +41,21 @@ fn draw<B: Backend>(terminal: &mut Terminal<B>, tui: &mut TuiClap) -> io::Result
             .title("Block")
             .borders(Borders::ALL);
         f.render_widget(block, chunks[0]);
+        let chunks_output = Layout::default()
+            .direction(Direction::Horizontal)
+            .margin(1)
+            .constraints(
+                [
+                    Constraint::Percentage(50),
+                    Constraint::Percentage(50),
+                ].as_ref()
+            )
+            .split(chunks[1]);
         let block = Block::default()
             .title("Block 2")
             .borders(Borders::ALL);
-        f.render_widget(block, chunks[1]);
-        let inset_area = edge_inset(&chunks[1], 1);
+        f.render_widget(block, chunks_output[0]);
+        let inset_area = edge_inset(&chunks_output[0], 1);
         tui.render_output(f, inset_area);
         let block = Block::default()
             .title("Command")
@@ -74,7 +69,7 @@ fn draw<B: Backend>(terminal: &mut Terminal<B>, tui: &mut TuiClap) -> io::Result
 }
 
 fn edge_inset(area: &Rect, margin: u16) -> Rect {
-    let mut inset_area = area.clone();
+    let mut inset_area = *area;
     inset_area.x += margin;
     inset_area.y += margin;
     inset_area.height -= margin;
@@ -98,10 +93,10 @@ fn handle_matches(matches: ArgMatches) -> Result<Vec<String>, String> {
     // Vary the output based on how many times the user used the "verbose" flag
     // (i.e. 'myprog -v -v -v' or 'myprog -vvv' vs 'myprog -v'
     let out = match matches.occurrences_of("v") {
-        0 => format!("No verbose info"),
-        1 => format!("Some verbose info"),
-        2 => format!("Tons of verbose info"),
-        3 | _ => format!("Don't be crazy"),
+        0 => "No verbose info".to_string(),
+        1 => "Some verbose info".to_string(),
+        2 => "Tons of verbose info".to_string(),
+        _ => "Don't be crazy".to_string(),
     };
     output.push(out);
 
@@ -109,10 +104,10 @@ fn handle_matches(matches: ArgMatches) -> Result<Vec<String>, String> {
     // (as below), requesting just the name used, or both at the same time
     if let Some(matches) = matches.subcommand_matches("test") {
         if matches.is_present("debug") {
-            let out = format!("Printing debug info...");
+            let out = "Printing debug info...".to_string();
             output.push(out);
         } else {
-            let out = format!("Printing normally...");
+            let out = "Printing normally...".to_string();
             output.push(out);
         }
     };
