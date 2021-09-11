@@ -1,10 +1,11 @@
+use clap::{load_yaml, App, ArgMatches};
 use std::io;
-use tui::Terminal;
-use tui::backend::{CrosstermBackend, Backend};
+use std::sync::Arc;
+use tui::backend::{Backend, CrosstermBackend};
+use tui::layout::{Constraint, Direction, Layout, Rect};
 use tui::widgets::{Block, Borders};
-use tui::layout::{Layout, Constraint, Direction, Rect};
+use tui::Terminal;
 use tui_clap::TuiClap;
-use clap::{App, ArgMatches, load_yaml};
 
 fn main() -> Result<(), io::Error> {
     let yaml = load_yaml!("cli.yaml");
@@ -13,8 +14,8 @@ fn main() -> Result<(), io::Error> {
     let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-
-    let mut tui = TuiClap::from_app(app, handle_matches);
+    let handle_matches_arc = Arc::new(handle_matches);
+    let mut tui = TuiClap::from_app(app, handle_matches_arc);
     tui.input_widget().prompt("prompt > ");
 
     terminal.clear().expect("Could not clear terminal");
@@ -24,7 +25,7 @@ fn main() -> Result<(), io::Error> {
     }
 }
 
-fn draw<B: Backend>(terminal: &mut Terminal<B>, tui: &mut TuiClap) -> io::Result<()>{
+fn draw<B: Backend>(terminal: &mut Terminal<B>, tui: &mut TuiClap) -> io::Result<()> {
     terminal.draw(|f| {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -33,33 +34,23 @@ fn draw<B: Backend>(terminal: &mut Terminal<B>, tui: &mut TuiClap) -> io::Result
                 [
                     Constraint::Percentage(10),
                     Constraint::Percentage(80),
-                    Constraint::Percentage(10)
-                ].as_ref()
+                    Constraint::Percentage(10),
+                ]
+                .as_ref(),
             )
             .split(f.size());
-        let block = Block::default()
-            .title("Block")
-            .borders(Borders::ALL);
+        let block = Block::default().title("Block").borders(Borders::ALL);
         f.render_widget(block, chunks[0]);
         let chunks_output = Layout::default()
             .direction(Direction::Horizontal)
             .margin(1)
-            .constraints(
-                [
-                    Constraint::Percentage(50),
-                    Constraint::Percentage(50),
-                ].as_ref()
-            )
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
             .split(chunks[1]);
-        let block = Block::default()
-            .title("Block 2")
-            .borders(Borders::ALL);
+        let block = Block::default().title("Block 2").borders(Borders::ALL);
         f.render_widget(block, chunks_output[0]);
         let inset_area = edge_inset(&chunks_output[0], 1);
         tui.render_output(f, inset_area);
-        let block = Block::default()
-            .title("Command")
-            .borders(Borders::ALL);
+        let block = Block::default().title("Command").borders(Borders::ALL);
         f.render_widget(block, chunks[2]);
 
         let inset_area = edge_inset(&chunks[2], 1);
@@ -80,7 +71,7 @@ fn edge_inset(area: &Rect, margin: u16) -> Rect {
 
 fn handle_matches(matches: ArgMatches) -> Result<Vec<String>, String> {
     let mut output = vec![];
-    
+
     let config = matches.value_of("config").unwrap_or("default.conf");
     let out = format!("Value for config: {}", config);
     output.push(out);

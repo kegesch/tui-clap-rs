@@ -196,11 +196,11 @@ pub struct TuiClap<'a> {
     command_output_widget: CommandOutput,
     clap: App<'a>,
     events: Events,
-    handle_matches: Box<dyn Fn(ArgMatches) -> Result<Vec<String>, String>>,
+    handle_matches: Arc<dyn Fn(ArgMatches) -> Result<Vec<String>, String> + Send + Sync>,
 }
 
 impl TuiClap<'_> {
-    pub fn from_app<'a>(app: App<'a>, handle_matches: impl Fn(ArgMatches) -> Result<Vec<String>, String>  + 'a + 'static) -> TuiClap {
+    pub fn from_app<'a>(app: App<'a>, handle_matches: Arc<impl Fn(ArgMatches) -> Result<Vec<String>, String>  + 'a + 'static + Send + Sync>) -> TuiClap {
         TuiClap {
             command_input_state: CommandInputState::default(),
             command_output_state: CommandOutputState::default(),
@@ -208,7 +208,7 @@ impl TuiClap<'_> {
             command_output_widget: Default::default(),
             clap: app,
             events: Events::default(),
-            handle_matches: Box::new(handle_matches)
+            handle_matches
         }
     }
 

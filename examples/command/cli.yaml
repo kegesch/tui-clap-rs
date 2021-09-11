@@ -15,7 +15,6 @@ args:
       index: 1
   - verbose:
       short: v
-      multiple: true
       about: Sets the level of verbosity
 subcommands:
   - test:
