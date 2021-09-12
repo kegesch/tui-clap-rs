@@ -12,6 +12,7 @@ use std::borrow::BorrowMut;
 use tui::Frame;
 use tui::backend::{Backend};
 use std::str::Lines;
+use std::sync::mpsc::{TryRecvError, RecvError};
 
 pub struct Events {
     rx: mpsc::Receiver<Event>,
@@ -171,8 +172,20 @@ impl Events {
         }
     }
 
-    pub fn next(&self) -> Result<Event, mpsc::RecvError> {
-        self.rx.recv()
+    pub fn next(&self) -> Result<Option<Event>, mpsc::RecvError> {
+        match self.rx.try_recv() {
+            Ok(event) => {
+                Ok(Some(event))
+            }
+            Err(err) => {
+                match err {
+                    TryRecvError::Empty => {Ok(None)}
+                    TryRecvError::Disconnected => {
+                        Err(RecvError {})
+                    }
+                }
+            }
+        }
     }
 
     pub fn disable_exit_key(&mut self) {
@@ -209,23 +222,29 @@ impl TuiClap<'_> {
         }
     }
 
-    pub fn fetch_event(&mut self) -> Result<(), mpsc::RecvError> {
-        if let Event::Key(input) = self.events.next()? {
-            match input.code {
-                KeyCode::Enter => {
-                    self.parse();
-                    self.command_input_state.content.clear();
+    /// Tries to fetch a new input event.
+    /// Returns true if a new event was registered and handled, false if no was available.
+    /// Returns an error, if the event transmission channel was disconnected.
+    pub fn fetch_event(&mut self) -> Result<bool, mpsc::RecvError> {
+        if let Some(event) = self.events.next()? {
+            if let Event::Key(input) = event {
+                match input.code {
+                    KeyCode::Enter => {
+                        self.parse();
+                        self.command_input_state.content.clear();
+                    }
+                    KeyCode::Char(char) => {
+                        self.command_input_state.add_char(char);
+                    }
+                    KeyCode::Backspace => {
+                        self.command_input_state.del_char();
+                    }
+                    _ => {}
                 }
-                KeyCode::Char(char) => {
-                    self.command_input_state.add_char(char);
-                }
-                KeyCode::Backspace => {
-                    self.command_input_state.del_char();
-                }
-                _ => {}
             }
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
     pub fn write_to_output(&mut self, string: String) {
