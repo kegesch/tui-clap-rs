@@ -15,7 +15,6 @@ use std::str::Lines;
 
 pub struct Events {
     rx: mpsc::Receiver<Event>,
-    input_handle: thread::JoinHandle<()>,
     ignore_exit_key: Arc<AtomicBool>,
 }
 
@@ -140,11 +139,10 @@ impl Events {
     pub fn from_config(config: Config) -> Events {
         let (tx, rx) = mpsc::channel();
         let ignore_exit_key = Arc::new(AtomicBool::new(false));
-        let input_handle = {
+        {
             let ignore_exit_key = ignore_exit_key.clone();
             thread::spawn(move || {
                 loop {
-
                     if let Ok(b) = poll(config.tick_rate) {
                         if !b {
                             continue;
@@ -170,7 +168,6 @@ impl Events {
         Events {
             rx,
             ignore_exit_key,
-            input_handle,
         }
     }
 

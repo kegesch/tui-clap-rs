@@ -3,6 +3,11 @@ name = "tui-clap"
 version = "0.1.0"
 authors = ["Jonas Geschke <jonas.geschke@xitaso.com>"]
 edition = "2018"
+description = "Provides tui-rs widgets to output and text input which is parsed by clap"
+license = "MIT"
+documentation = "https://github.com/kegesch/tui-clap-rs"
+homepage = "https://github.com/kegesch/tui-clap-rs"
+repository = "https://github.com/kegesch/tui-clap-rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
