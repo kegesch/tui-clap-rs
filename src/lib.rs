@@ -1,18 +1,19 @@
-use tui::widgets::{Widget, StatefulWidget};
+use clap::{App, ArgMatches, ErrorKind};
+use crossterm::event::{poll, read, Event, KeyCode};
+use std::borrow::BorrowMut;
+use std::cmp::{min};
+use std::str::Lines;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{RecvError, TryRecvError};
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
+use tui::backend::Backend;
 use tui::buffer::Buffer;
 use tui::layout::Rect;
 use tui::style::Style;
-use std::sync::{mpsc, Arc};
-use crossterm::event::{read, Event, KeyCode, poll};
-use std::{thread};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-use clap::{App, ArgMatches, ErrorKind};
-use std::borrow::BorrowMut;
+use tui::widgets::{StatefulWidget, Widget};
 use tui::Frame;
-use tui::backend::{Backend};
-use std::str::Lines;
-use std::sync::mpsc::{TryRecvError, RecvError};
 
 pub struct Events {
     rx: mpsc::Receiver<Event>,
@@ -26,16 +27,17 @@ pub struct CommandInput {
 
 #[derive(Default)]
 pub struct CommandInputState {
+    history: Vec<String>,
+    index_of_history: usize,
     content: String,
 }
 
 #[derive(Default, Clone)]
-pub struct CommandOutput {
-}
+pub struct CommandOutput {}
 
 #[derive(Default)]
 pub struct CommandOutputState {
-    history: Vec<String>
+    history: Vec<String>,
 }
 
 impl CommandInputState {
@@ -50,6 +52,20 @@ impl CommandInputState {
     pub fn reset(&mut self) {
         self.content.drain(..);
     }
+
+    pub fn enter(&mut self) -> String {
+        let command = self.content.clone();
+        self.history.push(command.clone());
+        self.reset();
+
+        command
+    }
+
+    pub fn back_in_history(&mut self) {
+        self.index_of_history = min(self.index_of_history + 1, self.history.len() - 1);
+
+        self.content = self.history[self.index_of_history].clone();
+    }
 }
 
 impl CommandInput {
@@ -63,7 +79,12 @@ impl StatefulWidget for CommandInput {
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         buf.set_string(area.left(), area.top(), &self.prompt, Style::default());
-        buf.set_string(area.left() + self.prompt.len() as u16, area.top(), &state.content, Style::default());
+        buf.set_string(
+            area.left() + self.prompt.len() as u16,
+            area.top(),
+            &state.content,
+            Style::default(),
+        );
     }
 }
 
@@ -102,7 +123,7 @@ impl StatefulWidget for CommandOutput {
             }
         }
 
-        for line in lines_to_render {
+        for line in lines_to_render.iter().rev().take(max_lines as usize).rev() {
             buf.set_string(area.left(), area.top() + y, line, Style::default());
             y += 1;
         }
@@ -142,23 +163,21 @@ impl Events {
         let ignore_exit_key = Arc::new(AtomicBool::new(false));
         {
             let ignore_exit_key = ignore_exit_key.clone();
-            thread::spawn(move || {
-                loop {
-                    if let Ok(b) = poll(config.tick_rate) {
-                        if !b {
-                            continue;
+            thread::spawn(move || loop {
+                if let Ok(b) = poll(config.tick_rate) {
+                    if !b {
+                        continue;
+                    }
+                    let read = read();
+                    if let Ok(event) = read {
+                        if let Err(err) = tx.send(event) {
+                            eprintln!("{}", err);
+                            return;
                         }
-                        let read = read();
-                        if let Ok(event) = read {
-                            if let Err(err) = tx.send(event) {
-                                eprintln!("{}", err);
-                                return;
-                            }
-                            if !ignore_exit_key.load(Ordering::Relaxed) {
-                                if let Event::Key(key) = event {
-                                    if key.code == config.exit_key {
-                                        return;
-                                    }
+                        if !ignore_exit_key.load(Ordering::Relaxed) {
+                            if let Event::Key(key) = event {
+                                if key.code == config.exit_key {
+                                    return;
                                 }
                             }
                         }
@@ -174,17 +193,11 @@ impl Events {
 
     pub fn next(&self) -> Result<Option<Event>, mpsc::RecvError> {
         match self.rx.try_recv() {
-            Ok(event) => {
-                Ok(Some(event))
-            }
-            Err(err) => {
-                match err {
-                    TryRecvError::Empty => {Ok(None)}
-                    TryRecvError::Disconnected => {
-                        Err(RecvError {})
-                    }
-                }
-            }
+            Ok(event) => Ok(Some(event)),
+            Err(err) => match err {
+                TryRecvError::Empty => Ok(None),
+                TryRecvError::Disconnected => Err(RecvError {}),
+            },
         }
     }
 
@@ -197,56 +210,31 @@ impl Events {
     }
 }
 
-
-
 pub struct TuiClap<'a> {
     command_input_state: CommandInputState,
     command_output_state: CommandOutputState,
     command_input_widget: CommandInput,
     command_output_widget: CommandOutput,
     clap: App<'a>,
-    events: Events,
     handle_matches: Arc<dyn Fn(ArgMatches) -> Result<Vec<String>, String> + Send + Sync>,
 }
 
 impl TuiClap<'_> {
-    pub fn from_app<'a>(app: App<'a>, handle_matches: Arc<impl Fn(ArgMatches) -> Result<Vec<String>, String>  + 'a + 'static + Send + Sync>) -> TuiClap {
+    pub fn from_app<'a>(
+        app: App<'a>,
+        handle_matches: Arc<
+            impl Fn(ArgMatches) -> Result<Vec<String>, String> + 'a + 'static + Send + Sync,
+        >,
+    ) -> TuiClap {
         TuiClap {
             command_input_state: CommandInputState::default(),
             command_output_state: CommandOutputState::default(),
             command_input_widget: Default::default(),
             command_output_widget: Default::default(),
             clap: app,
-            events: Events::default(),
-            handle_matches
+            handle_matches,
         }
     }
-
-    /// Tries to fetch a new input event.
-    /// Returns true if a new event was registered and handled, false if no was available.
-    /// Returns an error, if the event transmission channel was disconnected.
-    pub fn fetch_event(&mut self) -> Result<bool, mpsc::RecvError> {
-        if let Some(event) = self.events.next()? {
-            if let Event::Key(input) = event {
-                match input.code {
-                    KeyCode::Enter => {
-                        self.parse();
-                        self.command_input_state.content.clear();
-                    }
-                    KeyCode::Char(char) => {
-                        self.command_input_state.add_char(char);
-                    }
-                    KeyCode::Backspace => {
-                        self.command_input_state.del_char();
-                    }
-                    _ => {}
-                }
-            }
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
     pub fn write_to_output(&mut self, string: String) {
         let lines: Lines = string.lines();
         for str in lines {
@@ -264,29 +252,23 @@ impl TuiClap<'_> {
         let matches_result = self.clap.try_get_matches_from_mut(commands_vec.clone());
 
         match matches_result {
-            Ok(matches) => {
-                self.handle_matches(matches)
-            }
-            Err(err) => {
-                match err.kind {
-                    ErrorKind::DisplayHelp => {
-                        let mut buf = Vec::new();
-                        let mut writer = Box::new(&mut buf);
-                        self.clap.write_help(&mut writer).expect("Could not write help");
-                        self.write_to_output(std::str::from_utf8(buf.as_slice()).unwrap().to_string());
-                    }
-                    ErrorKind::DisplayVersion => {
-                        self.write_to_output(self.clap.render_long_version());
-                    }
-                    ErrorKind::Format => {}
-                    _ => {
-                        self.write_to_output(format!("error: {}", err))
-                    }
+            Ok(matches) => self.handle_matches(matches),
+            Err(err) => match err.kind {
+                ErrorKind::DisplayHelp => {
+                    let mut buf = Vec::new();
+                    let mut writer = Box::new(&mut buf);
+                    self.clap
+                        .write_help(&mut writer)
+                        .expect("Could not write help");
+                    self.write_to_output(std::str::from_utf8(buf.as_slice()).unwrap().to_string());
                 }
-            }
+                ErrorKind::DisplayVersion => {
+                    self.write_to_output(self.clap.render_long_version());
+                }
+                ErrorKind::Format => {}
+                _ => self.write_to_output(format!("error: {}", err)),
+            },
         }
-
-
     }
 
     fn handle_matches(&mut self, matches: ArgMatches) {
@@ -299,7 +281,6 @@ impl TuiClap<'_> {
         } else {
             self.write_to_output(output_res.unwrap_err())
         }
-
     }
 
     pub fn input_widget(&mut self) -> &mut CommandInput {
@@ -307,7 +288,11 @@ impl TuiClap<'_> {
     }
 
     pub fn render_input<B: Backend>(&mut self, frame: &mut Frame<B>, area: Rect) {
-        frame.render_stateful_widget(self.command_input_widget.clone(), area, self.command_input_state.borrow_mut());
+        frame.render_stateful_widget(
+            self.command_input_widget.clone(),
+            area,
+            self.command_input_state.borrow_mut(),
+        );
     }
 
     pub fn output_widget(&mut self) -> &mut CommandOutput {
@@ -315,6 +300,10 @@ impl TuiClap<'_> {
     }
 
     pub fn render_output<B: Backend>(&mut self, frame: &mut Frame<B>, area: Rect) {
-        frame.render_stateful_widget(self.command_output_widget.clone(), area, self.command_output_state.borrow_mut());
+        frame.render_stateful_widget(
+            self.command_output_widget.clone(),
+            area,
+            self.command_output_state.borrow_mut(),
+        );
     }
 }
