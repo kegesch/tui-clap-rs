@@ -1,7 +1,7 @@
 use clap::{App, ArgMatches, ErrorKind};
 use crossterm::event::{poll, read, Event, KeyCode};
 use std::borrow::BorrowMut;
-use std::cmp::{min};
+use std::cmp::{max, min};
 use std::str::Lines;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvError, TryRecvError};
@@ -15,11 +15,13 @@ use tui::style::Style;
 use tui::widgets::{StatefulWidget, Widget};
 use tui::Frame;
 
+/// Helper struct to read from `crossterm`'s input events
 pub struct Events {
     rx: mpsc::Receiver<Event>,
     ignore_exit_key: Arc<AtomicBool>,
 }
 
+/// The command input widget itself
 #[derive(Default, Clone)]
 pub struct CommandInput {
     prompt: String,
@@ -62,7 +64,21 @@ impl CommandInputState {
     }
 
     pub fn back_in_history(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+
         self.index_of_history = min(self.index_of_history + 1, self.history.len() - 1);
+
+        self.content = self.history[self.index_of_history].clone();
+    }
+
+    pub fn forward_in_history(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+
+        self.index_of_history = max(self.index_of_history - 1, 0);
 
         self.content = self.history[self.index_of_history].clone();
     }
@@ -158,6 +174,7 @@ impl Default for Events {
 }
 
 impl Events {
+    /// Creates an `Events` instance from `Config` and starts a thread to listen on `crossterm` input events
     pub fn from_config(config: Config) -> Events {
         let (tx, rx) = mpsc::channel();
         let ignore_exit_key = Arc::new(AtomicBool::new(false));
@@ -191,6 +208,8 @@ impl Events {
         }
     }
 
+    /// Checks if there was a new event to read from.
+    /// Returns `Some(Event)` if there was some, `None` if not and `Result::Err` if the connection was disconnected.
     pub fn next(&self) -> Result<Option<Event>, mpsc::RecvError> {
         match self.rx.try_recv() {
             Ok(event) => Ok(Some(event)),
@@ -210,21 +229,19 @@ impl Events {
     }
 }
 
+/// A struct holding widgets for input and output for interaction with a `clap:App`
 pub struct TuiClap<'a> {
     command_input_state: CommandInputState,
     command_output_state: CommandOutputState,
     command_input_widget: CommandInput,
     command_output_widget: CommandOutput,
-    clap: App<'a>,
-    handle_matches: Arc<dyn Fn(ArgMatches) -> Result<Vec<String>, String> + Send + Sync>,
+    clap: App<'a>
 }
 
 impl TuiClap<'_> {
+    /// Creates a `TuiClap` struct from a `clap:App`
     pub fn from_app<'a>(
         app: App<'a>,
-        handle_matches: Arc<
-            impl Fn(ArgMatches) -> Result<Vec<String>, String> + 'a + 'static + Send + Sync,
-        >,
     ) -> TuiClap {
         TuiClap {
             command_input_state: CommandInputState::default(),
@@ -232,9 +249,10 @@ impl TuiClap<'_> {
             command_input_widget: Default::default(),
             command_output_widget: Default::default(),
             clap: app,
-            handle_matches,
         }
     }
+
+    /// Write `string` to the output widget
     pub fn write_to_output(&mut self, string: String) {
         let lines: Lines = string.lines();
         for str in lines {
@@ -242,17 +260,22 @@ impl TuiClap<'_> {
         }
     }
 
+    /// Access the input widget's state
     pub fn state(&mut self) -> &mut CommandInputState {
         self.command_input_state.borrow_mut()
     }
 
-    pub fn parse(&mut self) {
+    /// Parses the current content of the input widget, resets it and returns the matches if successful.
+    /// If the command was not matched by clap, the error will be written to the output widget and a `Result::Err` is returned.
+    pub fn parse(&mut self) -> Result<ArgMatches, ()> {
         let content = self.command_input_state.content.clone();
+        self.state().enter();
+
         let commands_vec = content.split(' ').collect::<Vec<&str>>();
         let matches_result = self.clap.try_get_matches_from_mut(commands_vec.clone());
 
         match matches_result {
-            Ok(matches) => self.handle_matches(matches),
+            Ok(matches) => Ok(matches),
             Err(err) => match err.kind {
                 ErrorKind::DisplayHelp => {
                     let mut buf = Vec::new();
@@ -261,32 +284,29 @@ impl TuiClap<'_> {
                         .write_help(&mut writer)
                         .expect("Could not write help");
                     self.write_to_output(std::str::from_utf8(buf.as_slice()).unwrap().to_string());
+                    Err(())
                 }
                 ErrorKind::DisplayVersion => {
                     self.write_to_output(self.clap.render_long_version());
+                    Err(())
                 }
-                ErrorKind::Format => {}
-                _ => self.write_to_output(format!("error: {}", err)),
+                ErrorKind::Format => {
+                    Err(())
+                }
+                _ => {
+                    self.write_to_output(format!("error: {}", err));
+                    Err(())
+                },
             },
         }
     }
 
-    fn handle_matches(&mut self, matches: ArgMatches) {
-        let handle = &self.handle_matches;
-        let output_res: Result<Vec<String>, String> = handle(matches);
-        if let Ok(output) = output_res {
-            for out in output {
-                self.write_to_output(out);
-            }
-        } else {
-            self.write_to_output(output_res.unwrap_err())
-        }
-    }
-
+    /// Access the input widget
     pub fn input_widget(&mut self) -> &mut CommandInput {
         self.command_input_widget.borrow_mut()
     }
 
+    /// Render the input widget on `tui:Frame`
     pub fn render_input<B: Backend>(&mut self, frame: &mut Frame<B>, area: Rect) {
         frame.render_stateful_widget(
             self.command_input_widget.clone(),
@@ -295,10 +315,12 @@ impl TuiClap<'_> {
         );
     }
 
+    /// Access the output widget
     pub fn output_widget(&mut self) -> &mut CommandOutput {
         self.command_output_widget.borrow_mut()
     }
 
+    /// Render the output widget on `tui:Frame`
     pub fn render_output<B: Backend>(&mut self, frame: &mut Frame<B>, area: Rect) {
         frame.render_stateful_widget(
             self.command_output_widget.clone(),

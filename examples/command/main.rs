@@ -1,11 +1,11 @@
 use clap::{load_yaml, App, ArgMatches};
 use std::io;
-use std::sync::Arc;
+use crossterm::event::{Event, KeyCode};
 use tui::backend::{Backend, CrosstermBackend};
 use tui::layout::{Constraint, Direction, Layout, Rect};
 use tui::widgets::{Block, Borders};
 use tui::Terminal;
-use tui_clap::TuiClap;
+use tui_clap::{Events, TuiClap};
 
 fn main() -> Result<(), io::Error> {
     let yaml = load_yaml!("cli.yaml");
@@ -14,14 +14,43 @@ fn main() -> Result<(), io::Error> {
     let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let handle_matches_arc = Arc::new(handle_matches);
-    let mut tui = TuiClap::from_app(app, handle_matches_arc);
+
+    let mut tui = TuiClap::from_app(app);
     tui.input_widget().prompt("prompt > ");
 
     terminal.clear().expect("Could not clear terminal");
+
+    let events = Events::default();
+
     loop {
         draw(&mut terminal, &mut tui)?;
-        tui.fetch_event().expect("Could not fetch input event");
+        handle_input(&mut tui, &events)
+    }
+}
+
+fn handle_input(tui: &mut TuiClap, events: &Events) {
+    if let Ok(Some(Event::Key(key_event))) = events.next() {
+        match key_event.code {
+            KeyCode::Backspace => {
+                tui.state().del_char()
+            }
+            KeyCode::Enter => {
+                if let Ok(matches) = tui.parse() {
+                    match handle_matches(matches) {
+                        Ok(output) => {
+                            for message in output {
+                                tui.write_to_output(message)
+                            }
+                        }
+                        Err(err) => tui.write_to_output(err)
+                    }
+                }
+            }
+            KeyCode::Char(char) => {
+                tui.state().add_char(char)
+            },
+            _ => {}
+        }
     }
 }
 

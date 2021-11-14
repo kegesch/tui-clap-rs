@@ -20,15 +20,41 @@ fn main() -> Result<(), io::Error> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create a TuiClap instance and pass over a function that handles the arg matches
-    let mut tui = TuiClap::from_app(clapp, handle_matches);
+    let mut tui = TuiClap::from_app(clapp);
     
     terminal.clear();
+    
+    // handle events, Events struct is a helper struct to read from crossterm events
+    let events = Events::default();
     
     loop {
         // your drawing method
         draw(&mut terminal, &mut tui)?;
-        // let tui clap handle the input
-        tui.fetch_event();
+        
+        // handle events manually with the provided events struct, but you can use your own
+        if let Ok(Some(Event::Key(key_event))) = events.next() {
+            match key_event.code {
+                KeyCode::Backspace => {
+                    tui.state().del_char()
+                }
+                KeyCode::Enter => {
+                    if let Ok(matches) = tui.parse() {
+                        match handle_matches(matches) {
+                            Ok(output) => {
+                                for message in output {
+                                    tui.write_to_output(message)
+                                }
+                            }
+                            Err(err) => tui.write_to_output(err)
+                        }
+                    }
+                }
+                KeyCode::Char(char) => {
+                    tui.state().add_char(char)
+                },
+                _ => {}
+            }
+        }
     }
 }
 

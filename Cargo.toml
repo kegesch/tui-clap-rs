@@ -1,6 +1,6 @@
 [package]
 name = "tui-clap"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Jonas Geschke <jonas.geschke@xitaso.com>"]
 edition = "2018"
 description = "Provides tui-rs widgets to output and text input which is parsed by clap"
